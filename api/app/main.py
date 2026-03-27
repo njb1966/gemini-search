@@ -109,7 +109,10 @@ async def search(request: Request, q: str = Query(..., min_length=1)):
         {
             "url": url,
             "title": title,
-            "score": round(Levenshtein.ratio(q_lower, title.lower()), 3),
+            "score": round(max(
+                Levenshtein.ratio(q_lower, title.lower()),
+                Levenshtein.ratio(q_lower, url.lower()),
+            ), 3),
         }
         for url, title in rows
     ]
