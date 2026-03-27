@@ -8,10 +8,10 @@ DB_PATH = os.environ.get("DB_PATH", "./search.db")
 SEEDS_PATH = os.environ.get("SEEDS_PATH", "./seeds.txt")
 CONCURRENCY = 5
 TIMEOUT = 10.0
-MAX_BODY = 256 * 1024  # 256 KB
+MAX_BODY = 256 * 1024   # 256 KB
+MAX_DISCOVERED = 500    # cap on how many linked capsules to crawl
 
 
-# Gemini TLS context: capsules use self-signed certs, so we skip verification.
 _ssl_ctx = ssl.create_default_context()
 _ssl_ctx.check_hostname = False
 _ssl_ctx.verify_mode = ssl.CERT_NONE
@@ -45,7 +45,6 @@ async def fetch_gemini(url: str) -> str | None:
 
         status = header[:2]
         if not status.startswith("2"):
-            # Redirect, error, etc. — skip.
             return None
 
         body_bytes = await asyncio.wait_for(reader.read(MAX_BODY), timeout=TIMEOUT)
@@ -77,6 +76,24 @@ def extract_title(body: str) -> str | None:
     return None
 
 
+def extract_links(body: str) -> list[str]:
+    """Extract gemini:// URLs from link lines."""
+    links = []
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("=>"):
+            continue
+        parts = stripped[2:].split()
+        if parts and parts[0].startswith("gemini://"):
+            # Normalise: strip trailing slashes only from root URLs
+            url = parts[0].rstrip("/")
+            parsed = urllib.parse.urlparse(url)
+            if parsed.path == "":
+                url = url + "/"
+            links.append(url)
+    return links
+
+
 async def ensure_schema(db: aiosqlite.Connection) -> None:
     await db.execute("PRAGMA journal_mode=WAL")
     await db.execute("""
@@ -93,35 +110,41 @@ async def fetch_and_index(
     db: aiosqlite.Connection,
     sem: asyncio.Semaphore,
     gemini_url: str,
-) -> None:
+    label: str = "",
+) -> str | None:
+    """Fetch, index, and return body (for link extraction), or None on failure."""
     async with sem:
         try:
             body = await fetch_gemini(gemini_url)
         except Exception as exc:
-            print(f"[ERROR] {gemini_url}: {exc}")
-            return
+            print(f"[ERROR] {label}{gemini_url}: {exc}")
+            return None
 
     if body is None:
-        print(f"[SKIP]  {gemini_url}: non-success status or empty response")
-        return
+        print(f"[SKIP]  {label}{gemini_url}: non-success or empty")
+        return None
 
     title = extract_title(body)
     if not title:
-        print(f"[SKIP]  {gemini_url}: no title extracted")
-        return
+        print(f"[SKIP]  {label}{gemini_url}: no title")
+        return None
 
-    await db.execute(
-        "INSERT OR IGNORE INTO capsules (url, title) VALUES (?, ?)",
-        (gemini_url, title),
-    )
+    await db.execute("""
+        INSERT INTO capsules (url, title, last_seen) VALUES (?, ?, datetime('now'))
+        ON CONFLICT(url) DO UPDATE SET title=excluded.title, last_seen=datetime('now')
+    """, (gemini_url, title))
     await db.commit()
-    print(f"[OK]    {gemini_url}: {title!r}")
+    print(f"[OK]    {label}{gemini_url}: {title!r}")
+    return body
 
 
 async def main() -> None:
     try:
         with open(SEEDS_PATH) as f:
-            seeds = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+            seeds = [
+                line.strip() for line in f
+                if line.strip() and not line.startswith("#")
+            ]
     except FileNotFoundError:
         print(f"[ERROR] Seeds file not found: {SEEDS_PATH}")
         return
@@ -131,10 +154,35 @@ async def main() -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await ensure_schema(db)
         sem = asyncio.Semaphore(CONCURRENCY)
-        tasks = [fetch_and_index(db, sem, url) for url in seeds]
-        await asyncio.gather(*tasks)
 
-    print("Crawl complete.")
+        # Phase 1: crawl seeds and collect links
+        print("\n=== Phase 1: Seeds ===")
+        discovered: set[str] = set()
+        seed_set = set(seeds)
+
+        seed_bodies = await asyncio.gather(*[
+            fetch_and_index(db, sem, url) for url in seeds
+        ])
+
+        for body in seed_bodies:
+            if body:
+                for link in extract_links(body):
+                    if link not in seed_set:
+                        discovered.add(link)
+
+        # Phase 2: crawl discovered links (one level deep)
+        to_crawl = list(discovered)[:MAX_DISCOVERED]
+        print(f"\n=== Phase 2: Discovered links ({len(to_crawl)} URLs) ===")
+
+        await asyncio.gather(*[
+            fetch_and_index(db, sem, url, label="  ") for url in to_crawl
+        ])
+
+        # Summary
+        async with db.execute("SELECT COUNT(*) FROM capsules") as cur:
+            count = (await cur.fetchone())[0]
+
+    print(f"\nCrawl complete. {count} capsules in index.")
 
 
 if __name__ == "__main__":
