@@ -1,4 +1,5 @@
 import asyncio
+import re
 import ssl
 import urllib.parse
 from contextlib import asynccontextmanager
@@ -94,6 +95,12 @@ async def health():
     return {"status": "ok", "db": DB_PATH}
 
 
+def _fts_query(q: str) -> str:
+    """Convert a user query into an FTS5 prefix-match expression."""
+    tokens = re.findall(r"\w+", q.lower())
+    return " ".join(f"{t}*" for t in tokens) if tokens else ""
+
+
 @app.get("/search")
 @limiter.limit("30/second")
 async def search(request: Request, q: str = Query(..., min_length=1)):
@@ -101,7 +108,43 @@ async def search(request: Request, q: str = Query(..., min_length=1)):
         raise HTTPException(status_code=400, detail="Query must not be blank")
 
     db = request.app.state.db
-    async with db.execute("SELECT url, title FROM capsules WHERE title IS NOT NULL") as cursor:
+
+    # Try FTS5 first — handles multi-word queries and partial matches
+    fts_q = _fts_query(q)
+    if fts_q:
+        try:
+            async with db.execute(
+                """SELECT url, title, rank
+                   FROM capsules_fts
+                   WHERE capsules_fts MATCH ?
+                   ORDER BY rank
+                   LIMIT 20""",
+                (fts_q,),
+            ) as cursor:
+                fts_rows = await cursor.fetchall()
+
+            if fts_rows:
+                # FTS5 rank is negative BM25 (more negative = better match).
+                # Normalise to a 0–1 score for display.
+                best = min(r[2] for r in fts_rows)
+                worst = max(r[2] for r in fts_rows)
+                spread = (worst - best) or 1.0
+                results = [
+                    {
+                        "url": url,
+                        "title": title,
+                        "score": round(1.0 - (rank - best) / spread, 3),
+                    }
+                    for url, title, rank in fts_rows
+                ]
+                return results[:10]
+        except Exception:
+            pass  # FTS error — fall through to Levenshtein
+
+    # Levenshtein fallback — handles typos / fuzzy matches
+    async with db.execute(
+        "SELECT url, title FROM capsules WHERE title IS NOT NULL"
+    ) as cursor:
         rows = await cursor.fetchall()
 
     q_lower = q.lower()
