@@ -1,0 +1,44 @@
+# Core Gemini sites
+gemini://geminiprotocol.net/
+gemini://gemini.circumlunar.space/
+gemini://kennedy.gemi.dev/
+gemini://zaibatsu.circumlunar.space/
+gemini://republic.circumlunar.space/
+gemini://bbs.geminispace.org/
+gemini://transjovian.org/
+gemini://station.martinrue.com/
+gemini://gemlog.blue/
+gemini://warmedal.se/~antenna/
+
+# Tilde communities
+gemini://rawtext.club/
+gemini://rawtext.club/~ecliptik/
+gemini://tilde.pink/
+gemini://tilde.team/~ben/
+gemini://tilde.team/~khuxkm/
+gemini://gemini.ctrl-c.club/
+gemini://gemini.ctrl-c.club/~stack/
+
+# Personal capsules
+gemini://alexschroeder.ch/
+gemini://skyjake.fi/
+gemini://thurk.org/
+gemini://calcuode.com/
+gemini://calcuode.com/gemlog/
+gemini://szczezuja.space/
+gemini://szczezuja.space/gemlog/
+gemini://ew.srht.site/
+gemini://nytpu.com/
+gemini://nytpu.com/gemlog/
+gemini://warmedal.se/~bjorn/
+gemini://gemi.dev/
+gemini://gemi.dev/gemlog/
+gemini://gemini.sensorstation.co/
+gemini://gemini.cyberbot.space/
+gemini://gemini.conman.org/
+
+# Platforms
+gemini://smol.pub/
+gemini://midnight.pub/
+gemini://astrobotany.mozz.us/
+gemini://makeworld.space/
